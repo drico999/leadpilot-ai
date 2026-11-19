@@ -1,0 +1,797 @@
+{
+  "name": "LeadPilot: 1. Lead intake and qualification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "leadpilot/lead",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f966aea8-9336-49da-a0a0-b991c7f7d4f0",
+      "name": "Lead webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "leadpilotHeader01",
+          "name": "LeadPilot webhook key"
+        }
+      },
+      "webhookId": "2f5587c3-330c-443c-a522-bbf5377b002c"
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Validate lead\" (Run once for all items)\n// Input: Webhook item { body, headers, ... }. Output: { valid, lead | errors }.\n// --- inlined from lib/scoring.js ---\nconst FREE_EMAIL_DOMAINS = [\n  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',\n  'live.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com', 'mail.com',\n];\n\nconst BUDGET_OPTIONS = ['under-1k', '1k-5k', '5k-20k', '20k-plus', 'unsure'];\nconst TIMELINE_OPTIONS = ['asap', 'this-quarter', 'exploring'];\n\nconst BUDGET_POINTS = { 'under-1k': 0, '1k-5k': 6, '5k-20k': 12, '20k-plus': 18, unsure: 3 };\nconst TIMELINE_POINTS = { asap: 10, 'this-quarter': 6, exploring: 0 };\nconst RULE_MAX = 10 + 18 + 10 + 4 + 4; // sum of every rule's maximum\n\nconst EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/;\n\nfunction clean(value, max) {\n  return String(value == null ? '' : value).replace(/\\s+/g, ' ').trim().slice(0, max);\n}\n\n/**\n * Validate and normalise a raw form submission.\n * Returns { ok: true, lead } or { ok: false, errors: { field: message } }.\n */\nfunction normalizeLead(raw) {\n  const input = raw && typeof raw === 'object' ? raw : {};\n  const errors = {};\n\n  // Honeypot: real people never fill the hidden \"company_url\" field.\n  if (clean(input.company_url, 200)) {\n    return { ok: false, spam: true, errors: { form: 'Submission rejected.' } };\n  }\n\n  const lead = {\n    name: clean(input.name, 80),\n    email: clean(input.email, 120).toLowerCase(),\n    company: clean(input.company, 120),\n    website: clean(input.website, 200),\n    budget: BUDGET_OPTIONS.includes(input.budget) ? input.budget : 'unsure',\n    timeline: TIMELINE_OPTIONS.includes(input.timeline) ? input.timeline : 'exploring',\n    message: String(input.message == null ? '' : input.message).trim().slice(0, 2000),\n  };\n\n  if (lead.name.length < 2) errors.name = 'Enter your name.';\n  if (!EMAIL_RE.test(lead.email)) errors.email = 'Enter a valid email address.';\n  if (lead.message.length < 15) errors.message = 'Tell us a little more (at least 15 characters).';\n  if (lead.website && !/^https?:\\/\\//i.test(lead.website)) lead.website = 'https://' + lead.website;\n\n  if (Object.keys(errors).length) return { ok: false, errors };\n  return { ok: true, lead };\n}\n\n/** Deterministic signals a sales team trusts, independent of the LLM. */\nfunction ruleSignals(lead) {\n  const domain = (lead.email.split('@')[1] || '').toLowerCase();\n  const businessEmail = domain !== '' && !FREE_EMAIL_DOMAINS.includes(domain);\n  const signals = [];\n  let points = 0;\n\n  if (businessEmail) { points += 10; signals.push('Business email domain'); }\n  const b = BUDGET_POINTS[lead.budget] ?? 0;\n  if (b) { points += b; signals.push('Budget: ' + lead.budget); }\n  const t = TIMELINE_POINTS[lead.timeline] ?? 0;\n  if (t) { points += t; signals.push('Timeline: ' + lead.timeline); }\n  if (lead.message.length >= 200) { points += 4; signals.push('Detailed brief'); }\n  if (lead.website) { points += 4; signals.push('Website provided'); }\n\n  return { points, max: RULE_MAX, normalized: Math.round((points / RULE_MAX) * 100), signals, businessEmail };\n}\n\nfunction tierFor(score) {\n  if (score >= 70) return 'hot';\n  if (score >= 45) return 'warm';\n  return 'cold';\n}\n\n/**\n * Blend the LLM's judgement (65%) with deterministic rules (35%).\n * The AI reads intent and fit; rules keep the score explainable and stable.\n */\nfunction blendScore(aiScore, lead) {\n  const ai = Math.max(0, Math.min(100, Math.round(Number(aiScore) || 0)));\n  const rules = ruleSignals(lead);\n  const score = Math.round(ai * 0.65 + rules.normalized * 0.35);\n  return { score, tier: tierFor(score), aiScore: ai, ruleScore: rules.normalized, signals: rules.signals };\n}\n\n/** Parse the model's JSON reply defensively (handles ```json fences and stray text). */\nfunction parseModelJson(text) {\n  if (text && typeof text === 'object') return text;\n  const s = String(text || '');\n  const start = s.indexOf('{');\n  const end = s.lastIndexOf('}');\n  if (start === -1 || end <= start) throw new Error('Model reply contained no JSON object');\n  return JSON.parse(s.slice(start, end + 1));\n}\n\nfunction makeLeadId(date) {\n  const d = date || new Date();\n  const stamp = d.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);\n  return 'LP-' + stamp + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();\n}\n\n/** Hide personal data before anything leaves the CRM for the public dashboard. */\nfunction maskEmail(email) {\n  const [user, domain] = String(email || '').split('@');\n  if (!user || !domain) return '';\n  return user.slice(0, 1) + '•••@' + domain;\n}\n\nfunction firstName(name) {\n  return String(name || '').trim().split(/\\s+/)[0] || '';\n}\n// --- end lib/scoring.js ---\n\nreturn $input.all().map((item) => {\n  const body = item.json.body || {};\n  const check = normalizeLead(body);\n  if (!check.ok) {\n    return { json: { valid: false, spam: !!check.spam, errors: check.errors } };\n  }\n  const lead = {\n    ...check.lead,\n    id: makeLeadId(new Date()),\n    received_at: new Date().toISOString(),\n    source: String(body.source || 'website').slice(0, 30),\n  };\n  return { json: { valid: true, lead } };\n});\n"
+      },
+      "id": "65034549-8de8-46ee-a013-e135a4f93f94",
+      "name": "Validate lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e69570f5-23e0-46ba-a309-9488b7dc1ff8",
+              "leftValue": "={{ $json.valid }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "638e4c4e-7cd1-47f7-ab85-162c974e04b5",
+      "name": "Is valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: \"Some fields need attention.\", fields: $json.errors } }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "bc7e7d7d-4468-4934-af4a-7d0c22eef87b",
+      "name": "Reject invalid lead",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Lead submitted via website form:\nName: {{ $json.lead.name }}\nEmail: {{ $json.lead.email }}\nCompany: {{ $json.lead.company || 'not given' }}\nWebsite: {{ $json.lead.website || 'not given' }}\nBudget: {{ $json.lead.budget }}\nTimeline: {{ $json.lead.timeline }}\nMessage:\n\"\"\"\n{{ $json.lead.message }}\n\"\"\"",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You are LeadPilot, a senior sales-operations analyst for an AI automation agency.\nYou qualify inbound leads for automation projects (n8n, Make, Zapier, AI agents, OpenAI integrations, CRM and email automation).\n\nReturn ONLY a JSON object with exactly these keys:\n{\n  \"ai_score\": integer 0-100 (fit and buying intent; 80+ = clear budget, pain and urgency),\n  \"intent\": one of \"new_project\" | \"consultation\" | \"support\" | \"partnership\" | \"job_application\" | \"spam\" | \"other\",\n  \"industry\": short string, best guess,\n  \"company_size\": one of \"solo\" | \"small\" | \"mid\" | \"enterprise\" | \"unknown\",\n  \"summary\": one sentence, max 30 words, what they want,\n  \"pain_points\": array of up to 3 short strings,\n  \"automation_ideas\": array of up to 3 concrete automations we could build for them,\n  \"recommended_action\": one short imperative sentence for the sales team,\n  \"reply_subject\": email subject line for a personal first reply,\n  \"reply_body\": plain-text email reply (90-140 words) from Andries, warm and specific to their message, proposing a 20-minute discovery call. No placeholders in square brackets.\n}\nNever invent facts about the company. If the message is spam or nonsense, set intent \"spam\" and ai_score below 10."
+            }
+          ]
+        }
+      },
+      "id": "7aecd5be-c3c9-4d4b-a4da-fa28cefb7de4",
+      "name": "Qualify with GPT",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        680,
+        280
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "options": {
+          "temperature": 0.3,
+          "timeout": 45000,
+          "maxRetries": 2,
+          "responseFormat": "json_object"
+        }
+      },
+      "id": "7a3a3ea6-5d05-43c8-a448-f396d978f9b3",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        680,
+        480
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "leadpilotOpenAI01",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Parse and score\" (Run once for all items)\n// Merges the validated lead with GPT's JSON and blends in rule-based signals.\n// If the OpenAI call failed (node set to continue on error) we fall back to\n// rules only, so the lead is never lost.\n// --- inlined from lib/scoring.js ---\nconst FREE_EMAIL_DOMAINS = [\n  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',\n  'live.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com', 'mail.com',\n];\n\nconst BUDGET_OPTIONS = ['under-1k', '1k-5k', '5k-20k', '20k-plus', 'unsure'];\nconst TIMELINE_OPTIONS = ['asap', 'this-quarter', 'exploring'];\n\nconst BUDGET_POINTS = { 'under-1k': 0, '1k-5k': 6, '5k-20k': 12, '20k-plus': 18, unsure: 3 };\nconst TIMELINE_POINTS = { asap: 10, 'this-quarter': 6, exploring: 0 };\nconst RULE_MAX = 10 + 18 + 10 + 4 + 4; // sum of every rule's maximum\n\nconst EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/;\n\nfunction clean(value, max) {\n  return String(value == null ? '' : value).replace(/\\s+/g, ' ').trim().slice(0, max);\n}\n\n/**\n * Validate and normalise a raw form submission.\n * Returns { ok: true, lead } or { ok: false, errors: { field: message } }.\n */\nfunction normalizeLead(raw) {\n  const input = raw && typeof raw === 'object' ? raw : {};\n  const errors = {};\n\n  // Honeypot: real people never fill the hidden \"company_url\" field.\n  if (clean(input.company_url, 200)) {\n    return { ok: false, spam: true, errors: { form: 'Submission rejected.' } };\n  }\n\n  const lead = {\n    name: clean(input.name, 80),\n    email: clean(input.email, 120).toLowerCase(),\n    company: clean(input.company, 120),\n    website: clean(input.website, 200),\n    budget: BUDGET_OPTIONS.includes(input.budget) ? input.budget : 'unsure',\n    timeline: TIMELINE_OPTIONS.includes(input.timeline) ? input.timeline : 'exploring',\n    message: String(input.message == null ? '' : input.message).trim().slice(0, 2000),\n  };\n\n  if (lead.name.length < 2) errors.name = 'Enter your name.';\n  if (!EMAIL_RE.test(lead.email)) errors.email = 'Enter a valid email address.';\n  if (lead.message.length < 15) errors.message = 'Tell us a little more (at least 15 characters).';\n  if (lead.website && !/^https?:\\/\\//i.test(lead.website)) lead.website = 'https://' + lead.website;\n\n  if (Object.keys(errors).length) return { ok: false, errors };\n  return { ok: true, lead };\n}\n\n/** Deterministic signals a sales team trusts, independent of the LLM. */\nfunction ruleSignals(lead) {\n  const domain = (lead.email.split('@')[1] || '').toLowerCase();\n  const businessEmail = domain !== '' && !FREE_EMAIL_DOMAINS.includes(domain);\n  const signals = [];\n  let points = 0;\n\n  if (businessEmail) { points += 10; signals.push('Business email domain'); }\n  const b = BUDGET_POINTS[lead.budget] ?? 0;\n  if (b) { points += b; signals.push('Budget: ' + lead.budget); }\n  const t = TIMELINE_POINTS[lead.timeline] ?? 0;\n  if (t) { points += t; signals.push('Timeline: ' + lead.timeline); }\n  if (lead.message.length >= 200) { points += 4; signals.push('Detailed brief'); }\n  if (lead.website) { points += 4; signals.push('Website provided'); }\n\n  return { points, max: RULE_MAX, normalized: Math.round((points / RULE_MAX) * 100), signals, businessEmail };\n}\n\nfunction tierFor(score) {\n  if (score >= 70) return 'hot';\n  if (score >= 45) return 'warm';\n  return 'cold';\n}\n\n/**\n * Blend the LLM's judgement (65%) with deterministic rules (35%).\n * The AI reads intent and fit; rules keep the score explainable and stable.\n */\nfunction blendScore(aiScore, lead) {\n  const ai = Math.max(0, Math.min(100, Math.round(Number(aiScore) || 0)));\n  const rules = ruleSignals(lead);\n  const score = Math.round(ai * 0.65 + rules.normalized * 0.35);\n  return { score, tier: tierFor(score), aiScore: ai, ruleScore: rules.normalized, signals: rules.signals };\n}\n\n/** Parse the model's JSON reply defensively (handles ```json fences and stray text). */\nfunction parseModelJson(text) {\n  if (text && typeof text === 'object') return text;\n  const s = String(text || '');\n  const start = s.indexOf('{');\n  const end = s.lastIndexOf('}');\n  if (start === -1 || end <= start) throw new Error('Model reply contained no JSON object');\n  return JSON.parse(s.slice(start, end + 1));\n}\n\nfunction makeLeadId(date) {\n  const d = date || new Date();\n  const stamp = d.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);\n  return 'LP-' + stamp + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();\n}\n\n/** Hide personal data before anything leaves the CRM for the public dashboard. */\nfunction maskEmail(email) {\n  const [user, domain] = String(email || '').split('@');\n  if (!user || !domain) return '';\n  return user.slice(0, 1) + '•••@' + domain;\n}\n\nfunction firstName(name) {\n  return String(name || '').trim().split(/\\s+/)[0] || '';\n}\n// --- end lib/scoring.js ---\n\nconst leads = $('Validate lead').all();\n\nconst list = (v, n) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => String(x).slice(0, 160)).slice(0, n);\nconst esc = (s) => String(s == null ? '' : s).replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n\nreturn $input.all().map((item, i) => {\n  const lead = leads[i].json.lead;\n  let ai = {};\n  let aiOk = true;\n  try {\n    const out = item.json;\n    if (out.error) throw new Error(String(out.error.message || out.error));\n    // With JSON mode on, the LLM Chain returns the parsed object directly;\n    // otherwise the reply arrives as a string in `text`.\n    ai = typeof out.text === 'string' ? parseModelJson(out.text) : out;\n    if (ai.ai_score === undefined && ai.intent === undefined) throw new Error('Model reply missing expected fields');\n  } catch (err) {\n    aiOk = false;\n    ai = { summary: 'AI qualification unavailable; scored on rules only.', recommended_action: 'Review this lead manually.' };\n  }\n\n  const blended = blendScore(aiOk ? ai.ai_score : 40, lead);\n  const fname = firstName(lead.name);\n  const q = {\n    score: ai.intent === 'spam' ? Math.min(blended.score, 9) : blended.score,\n    tier: ai.intent === 'spam' ? 'cold' : blended.tier,\n    ai_score: blended.aiScore,\n    rule_score: blended.ruleScore,\n    signals: blended.signals,\n    intent: String(ai.intent || 'other'),\n    industry: String(ai.industry || 'Unknown').slice(0, 60),\n    company_size: String(ai.company_size || 'unknown'),\n    summary: String(ai.summary || '').slice(0, 300),\n    pain_points: list(ai.pain_points, 3),\n    automation_ideas: list(ai.automation_ideas, 3),\n    recommended_action: String(ai.recommended_action || '').slice(0, 200),\n    reply_subject: String(ai.reply_subject || `Re: your automation enquiry`).slice(0, 140),\n    reply_body: String(ai.reply_body || `Hi ${fname},\\n\\nThanks for getting in touch. I'll read your message properly and come back to you within one working day.\\n\\nBest regards,\\nAndries Mokono`),\n  };\n\n  const notify_html = `\n<div style=\"font-family:Arial,sans-serif;max-width:560px;color:#13202e\">\n  <h2 style=\"margin:0 0 4px\">Hot lead: ${esc(lead.name)}${lead.company ? ' at ' + esc(lead.company) : ''}</h2>\n  <p style=\"margin:0 0 16px;color:#556270\">Score ${q.score}/100. ${esc(q.recommended_action)}</p>\n  <p><strong>Summary:</strong> ${esc(q.summary)}</p>\n  <p><strong>Email:</strong> ${esc(lead.email)}<br><strong>Budget:</strong> ${esc(lead.budget)}<br><strong>Timeline:</strong> ${esc(lead.timeline)}<br><strong>Industry:</strong> ${esc(q.industry)}</p>\n  <p><strong>Their message:</strong></p>\n  <blockquote style=\"margin:0;padding:8px 12px;border-left:3px solid #1f7a6d;color:#33404e\">${esc(lead.message).replace(/\\n/g, '<br>')}</blockquote>\n  <p style=\"margin-top:16px\">A personalised reply is waiting in your Gmail drafts.</p>\n  <p style=\"color:#556270;font-size:12px\">Lead ${esc(lead.id)} received ${esc(lead.received_at)}</p>\n</div>`;\n\n  return { json: { lead, qualification: q, ai_ok: aiOk, notify_html } };\n});\n"
+      },
+      "id": "b6119f68-3ffa-40aa-adb3-1a37fb6a7921",
+      "name": "Parse and score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "lead_id": "={{ $json.lead.id }}",
+            "received_at": "={{ $json.lead.received_at }}",
+            "name": "={{ $json.lead.name }}",
+            "email": "={{ $json.lead.email }}",
+            "company": "={{ $json.lead.company }}",
+            "website": "={{ $json.lead.website }}",
+            "budget": "={{ $json.lead.budget }}",
+            "timeline": "={{ $json.lead.timeline }}",
+            "message": "={{ $json.lead.message }}",
+            "score": "={{ $json.qualification.score }}",
+            "tier": "={{ $json.qualification.tier }}",
+            "ai_score": "={{ $json.qualification.ai_score }}",
+            "rule_score": "={{ $json.qualification.rule_score }}",
+            "intent": "={{ $json.qualification.intent }}",
+            "industry": "={{ $json.qualification.industry }}",
+            "company_size": "={{ $json.qualification.company_size }}",
+            "summary": "={{ $json.qualification.summary }}",
+            "pain_points": "={{ $json.qualification.pain_points.join('; ') }}",
+            "automation_ideas": "={{ $json.qualification.automation_ideas.join('; ') }}",
+            "recommended_action": "={{ $json.qualification.recommended_action }}",
+            "status": "new",
+            "last_note": "",
+            "updated_at": "={{ $json.lead.received_at }}",
+            "source": "={{ $json.lead.source }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "lead_id",
+              "displayName": "lead_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "website",
+              "displayName": "website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "budget",
+              "displayName": "budget",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "timeline",
+              "displayName": "timeline",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score",
+              "displayName": "score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tier",
+              "displayName": "tier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ai_score",
+              "displayName": "ai_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "rule_score",
+              "displayName": "rule_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "intent",
+              "displayName": "intent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "industry",
+              "displayName": "industry",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company_size",
+              "displayName": "company_size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "pain_points",
+              "displayName": "pain_points",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "automation_ideas",
+              "displayName": "automation_ideas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "recommended_action",
+              "displayName": "recommended_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_note",
+              "displayName": "last_note",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "a1d946e2-e6d6-4798-a825-5cef88d89157",
+      "name": "Append lead to CRM",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        1220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "leadpilotSheets01",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9dbf9517-19a5-456a-a428-e8f8cab767c3",
+              "leftValue": "={{ $('Parse and score').first().json.qualification.tier }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "hot"
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "96c1b950-c5e1-426d-a2c5-8e9c62fe7801",
+      "name": "Is hot?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "you@example.com",
+        "subject": "=Hot lead ({{ $('Parse and score').first().json.qualification.score }}): {{ $('Parse and score').first().json.lead.name }}{{ $('Parse and score').first().json.lead.company ? ' at ' + $('Parse and score').first().json.lead.company : '' }}",
+        "message": "={{ $('Parse and score').first().json.notify_html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "LeadPilot"
+        }
+      },
+      "id": "2533ac9a-5f6f-4eae-a9ce-e13fb6ac0908",
+      "name": "Alert owner",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1660,
+        180
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "leadpilotGmail001",
+          "name": "Gmail account"
+        }
+      },
+      "webhookId": "61cc93b8-f88b-46d3-a79a-3e3013a1f5e4",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "388de295-7d06-40b9-acb8-e044d81e51d5",
+              "leftValue": "={{ $('Parse and score').first().json.qualification.intent }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              },
+              "rightValue": "spam"
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "60e786da-8ebc-4d59-a50f-1f0827246bb1",
+      "name": "Worth a reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $('Parse and score').first().json.qualification.reply_subject }}",
+        "emailType": "text",
+        "message": "={{ $('Parse and score').first().json.qualification.reply_body }}",
+        "options": {
+          "sendTo": "={{ $('Parse and score').first().json.lead.email }}"
+        }
+      },
+      "id": "b0340b56-1acd-4a20-a99c-63b15fee8724",
+      "name": "Draft reply in Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2100,
+        220
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "leadpilotGmail001",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Build response\" (Run once for all items)\n// Reports which steps actually ran, so the website can show an honest trace.\n\nconst scored = $('Parse and score').first().json;\n\nfunction status(nodeName) {\n  try {\n    const node = $(nodeName);\n    if (!node.isExecuted) return 'skipped';\n    const out = node.first();\n    if (!out || out.json.error) return 'failed';\n    return 'done';\n  } catch (e) {\n    return 'skipped';\n  }\n}\n\nconst actions = [\n  { step: 'webhook', status: 'done' },\n  { step: 'validate', status: 'done' },\n  { step: 'ai', status: scored.ai_ok ? 'done' : 'failed' },\n  { step: 'crm', status: status('Append lead to CRM') },\n  { step: 'draft', status: status('Draft reply in Gmail') },\n  { step: 'notify', status: status('Alert owner') },\n];\n\nconst q = { ...scored.qualification };\n\nreturn [{\n  json: {\n    ok: true,\n    lead: {\n      id: scored.lead.id,\n      name: scored.lead.name,\n      company: scored.lead.company,\n      received_at: scored.lead.received_at,\n    },\n    qualification: q,\n    actions,\n  },\n}];\n"
+      },
+      "id": "58d4057f-9721-4537-ae14-25aa7bd96637",
+      "name": "Build response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "6e887a3d-9ed4-42ba-acce-a2aa4708c123",
+      "name": "Respond to website",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Lead intake and qualification\nCalled by the website through `/api/lead` with the `X-LeadPilot-Key` header.\n\n1. Validate input (shared rules from `lib/scoring.js`)\n2. GPT reads intent and fit, writes a reply\n3. Score = 65% AI + 35% rules\n4. Append to the **Leads** tab, alert owner if hot, save a Gmail **draft**\n5. Answer the website with an honest step trace\n\nCRM and Gmail steps continue on error so a lead is never lost.",
+        "height": 300,
+        "width": 520,
+        "color": 4
+      },
+      "id": "a7e6880f-d315-4778-adac-cb9a304065cf",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -40
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Lead webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate lead": {
+      "main": [
+        [
+          {
+            "node": "Is valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is valid?": {
+      "main": [
+        [
+          {
+            "node": "Qualify with GPT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject invalid lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Qualify with GPT",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualify with GPT": {
+      "main": [
+        [
+          {
+            "node": "Parse and score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse and score": {
+      "main": [
+        [
+          {
+            "node": "Append lead to CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append lead to CRM": {
+      "main": [
+        [
+          {
+            "node": "Is hot?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is hot?": {
+      "main": [
+        [
+          {
+            "node": "Alert owner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Worth a reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert owner": {
+      "main": [
+        [
+          {
+            "node": "Worth a reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Worth a reply?": {
+      "main": [
+        [
+          {
+            "node": "Draft reply in Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft reply in Gmail": {
+      "main": [
+        [
+          {
+            "node": "Build response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build response": {
+      "main": [
+        [
+          {
+            "node": "Respond to website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Johannesburg",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generatedBy": "leadpilot-ai/scripts/build-workflows.mjs"
+  }
+}

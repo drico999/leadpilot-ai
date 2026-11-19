@@ -1,0 +1,135 @@
+{
+  "name": "LeadPilot: 4. CRM API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "leadpilot/leads",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5a2ed9b5-9140-4e11-a8cf-f2e640011471",
+      "name": "Leads webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "leadpilotHeader01",
+          "name": "LeadPilot webhook key"
+        }
+      },
+      "webhookId": "0df8ecb2-c95d-47b3-ae12-c44d12427d5f"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "ae609e0e-634e-4d8b-a374-89ed4aad51a7",
+      "name": "Read CRM",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "leadpilotSheets01",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Mask and shape\" (Run once for all items)\n// Public dashboard feed: first names only, no emails or messages.\n// --- inlined from lib/scoring.js ---\nconst FREE_EMAIL_DOMAINS = [\n  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',\n  'live.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com', 'mail.com',\n];\n\nconst BUDGET_OPTIONS = ['under-1k', '1k-5k', '5k-20k', '20k-plus', 'unsure'];\nconst TIMELINE_OPTIONS = ['asap', 'this-quarter', 'exploring'];\n\nconst BUDGET_POINTS = { 'under-1k': 0, '1k-5k': 6, '5k-20k': 12, '20k-plus': 18, unsure: 3 };\nconst TIMELINE_POINTS = { asap: 10, 'this-quarter': 6, exploring: 0 };\nconst RULE_MAX = 10 + 18 + 10 + 4 + 4; // sum of every rule's maximum\n\nconst EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/;\n\nfunction clean(value, max) {\n  return String(value == null ? '' : value).replace(/\\s+/g, ' ').trim().slice(0, max);\n}\n\n/**\n * Validate and normalise a raw form submission.\n * Returns { ok: true, lead } or { ok: false, errors: { field: message } }.\n */\nfunction normalizeLead(raw) {\n  const input = raw && typeof raw === 'object' ? raw : {};\n  const errors = {};\n\n  // Honeypot: real people never fill the hidden \"company_url\" field.\n  if (clean(input.company_url, 200)) {\n    return { ok: false, spam: true, errors: { form: 'Submission rejected.' } };\n  }\n\n  const lead = {\n    name: clean(input.name, 80),\n    email: clean(input.email, 120).toLowerCase(),\n    company: clean(input.company, 120),\n    website: clean(input.website, 200),\n    budget: BUDGET_OPTIONS.includes(input.budget) ? input.budget : 'unsure',\n    timeline: TIMELINE_OPTIONS.includes(input.timeline) ? input.timeline : 'exploring',\n    message: String(input.message == null ? '' : input.message).trim().slice(0, 2000),\n  };\n\n  if (lead.name.length < 2) errors.name = 'Enter your name.';\n  if (!EMAIL_RE.test(lead.email)) errors.email = 'Enter a valid email address.';\n  if (lead.message.length < 15) errors.message = 'Tell us a little more (at least 15 characters).';\n  if (lead.website && !/^https?:\\/\\//i.test(lead.website)) lead.website = 'https://' + lead.website;\n\n  if (Object.keys(errors).length) return { ok: false, errors };\n  return { ok: true, lead };\n}\n\n/** Deterministic signals a sales team trusts, independent of the LLM. */\nfunction ruleSignals(lead) {\n  const domain = (lead.email.split('@')[1] || '').toLowerCase();\n  const businessEmail = domain !== '' && !FREE_EMAIL_DOMAINS.includes(domain);\n  const signals = [];\n  let points = 0;\n\n  if (businessEmail) { points += 10; signals.push('Business email domain'); }\n  const b = BUDGET_POINTS[lead.budget] ?? 0;\n  if (b) { points += b; signals.push('Budget: ' + lead.budget); }\n  const t = TIMELINE_POINTS[lead.timeline] ?? 0;\n  if (t) { points += t; signals.push('Timeline: ' + lead.timeline); }\n  if (lead.message.length >= 200) { points += 4; signals.push('Detailed brief'); }\n  if (lead.website) { points += 4; signals.push('Website provided'); }\n\n  return { points, max: RULE_MAX, normalized: Math.round((points / RULE_MAX) * 100), signals, businessEmail };\n}\n\nfunction tierFor(score) {\n  if (score >= 70) return 'hot';\n  if (score >= 45) return 'warm';\n  return 'cold';\n}\n\n/**\n * Blend the LLM's judgement (65%) with deterministic rules (35%).\n * The AI reads intent and fit; rules keep the score explainable and stable.\n */\nfunction blendScore(aiScore, lead) {\n  const ai = Math.max(0, Math.min(100, Math.round(Number(aiScore) || 0)));\n  const rules = ruleSignals(lead);\n  const score = Math.round(ai * 0.65 + rules.normalized * 0.35);\n  return { score, tier: tierFor(score), aiScore: ai, ruleScore: rules.normalized, signals: rules.signals };\n}\n\n/** Parse the model's JSON reply defensively (handles ```json fences and stray text). */\nfunction parseModelJson(text) {\n  if (text && typeof text === 'object') return text;\n  const s = String(text || '');\n  const start = s.indexOf('{');\n  const end = s.lastIndexOf('}');\n  if (start === -1 || end <= start) throw new Error('Model reply contained no JSON object');\n  return JSON.parse(s.slice(start, end + 1));\n}\n\nfunction makeLeadId(date) {\n  const d = date || new Date();\n  const stamp = d.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);\n  return 'LP-' + stamp + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();\n}\n\n/** Hide personal data before anything leaves the CRM for the public dashboard. */\nfunction maskEmail(email) {\n  const [user, domain] = String(email || '').split('@');\n  if (!user || !domain) return '';\n  return user.slice(0, 1) + '•••@' + domain;\n}\n\nfunction firstName(name) {\n  return String(name || '').trim().split(/\\s+/)[0] || '';\n}\n// --- end lib/scoring.js ---\n\nconst items = $input.all();\nconst failed = items.find((i) => i.json && i.json.error);\nif (failed) {\n  return [{ json: { ok: false, error: 'The CRM sheet could not be read. Check the Google Sheets credential and SHEET_ID.' } }];\n}\nconst rows = items.map((i) => i.json).filter((r) => r && r.lead_id);\n\nconst leads = rows\n  .sort((a, b) => (Date.parse(b.received_at) || 0) - (Date.parse(a.received_at) || 0))\n  .slice(0, 50)\n  .map((r) => ({\n    id: r.lead_id,\n    received_at: r.received_at,\n    name: firstName(r.name),\n    company: r.company || '',\n    tier: r.tier || 'cold',\n    score: Number(r.score) || 0,\n    industry: r.industry || '',\n    status: r.status || 'new',\n    summary: String(r.summary || '').slice(0, 160),\n  }));\n\nreturn [{ json: { ok: true, generated_at: new Date().toISOString(), total: rows.length, leads } }];\n"
+      },
+      "id": "276076e0-d809-4f9b-a95f-bb5ed545fe99",
+      "name": "Mask and shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "86850e53-374e-41ad-ac70-649e97a56895",
+      "name": "Respond with leads",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Leads webhook": {
+      "main": [
+        [
+          {
+            "node": "Read CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read CRM": {
+      "main": [
+        [
+          {
+            "node": "Mask and shape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mask and shape": {
+      "main": [
+        [
+          {
+            "node": "Respond with leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Johannesburg",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generatedBy": "leadpilot-ai/scripts/build-workflows.mjs"
+  }
+}

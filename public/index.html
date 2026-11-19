@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeadPilot AI: inbound lead automation with n8n and OpenAI</title>
+  <meta name="description" content="A live AI automation that reads, scores, logs and answers inbound leads in seconds. Built with n8n, the OpenAI API, Gmail and Google Sheets by Andries Mokono.">
+  <meta property="og:title" content="LeadPilot AI: inbound leads, qualified in seconds">
+  <meta property="og:description" content="Fill in the form and watch an n8n + OpenAI pipeline score your lead, log it to a Google Sheets CRM and draft a reply.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip" href="#demo">Skip to the live demo</a>
+
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="LeadPilot home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="6" cy="16" r="4"/><circle cx="26" cy="7" r="3"/><circle cx="26" cy="16" r="3"/><circle cx="26" cy="25" r="3"/><path d="M10 16h6l6-9M16 16h7M16 16l6 9" fill="none" stroke-width="2.4"/></svg>
+      LeadPilot
+    </a>
+    <nav aria-label="Main">
+      <a href="#behind">How it works</a>
+      <a href="/dashboard">Pipeline</a>
+      <a href="https://github.com/drico999/leadpilot-ai" data-link="github">Source code</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" id="demo" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title">Every new lead is read, scored, logged and answered in under ten seconds.</h1>
+        <p class="lede">LeadPilot is a working AI automation built with n8n, the OpenAI API, Gmail and Google Sheets. Fill in the form as if you were a client and watch each step run.</p>
+        <p class="mode-note" id="mode-note" hidden></p>
+      </div>
+
+      <form class="lead-form" id="lead-form" novalidate>
+        <div class="field-row">
+          <label class="field">Your name
+            <input name="name" autocomplete="name" required minlength="2" maxlength="80">
+          </label>
+          <label class="field">Work email
+            <input name="email" type="email" autocomplete="email" required maxlength="120">
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">Company
+            <input name="company" autocomplete="organization" maxlength="120">
+          </label>
+          <label class="field">Website
+            <input name="website" inputmode="url" placeholder="example.co.za" maxlength="200">
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">Budget
+            <select name="budget">
+              <option value="unsure">Not sure yet</option>
+              <option value="under-1k">Under $1k</option>
+              <option value="1k-5k">$1k to $5k</option>
+              <option value="5k-20k">$5k to $20k</option>
+              <option value="20k-plus">$20k or more</option>
+            </select>
+          </label>
+          <label class="field">Timeline
+            <select name="timeline">
+              <option value="exploring">Just exploring</option>
+              <option value="this-quarter">This quarter</option>
+              <option value="asap">As soon as possible</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">What would you like to automate?
+          <textarea name="message" rows="4" required minlength="15" maxlength="2000" placeholder="We get about 60 enquiries a week through our site and Gmail. Replies take days and nothing ends up in our CRM…"></textarea>
+        </label>
+        <label class="hp" aria-hidden="true">Company URL<input name="company_url" tabindex="-1" autocomplete="off"></label>
+
+        <div class="form-foot">
+          <button type="submit" class="btn" id="submit-btn">Run the pipeline</button>
+          <button type="button" class="btn-quiet" id="sample-btn">Fill with a sample lead</button>
+        </div>
+        <p class="form-msg" id="form-msg" role="alert"></p>
+        <p class="fine">Replies are saved as Gmail drafts for a person to review. Nothing is emailed to you automatically.</p>
+      </form>
+    </section>
+
+    <section class="route-wrap" aria-label="Pipeline progress">
+      <ol class="route" id="route">
+        <li data-step="webhook"><span class="stop"></span><strong>Form received</strong><span class="tool">n8n webhook</span></li>
+        <li data-step="validate"><span class="stop"></span><strong>Checked</strong><span class="tool">Code node</span></li>
+        <li data-step="ai"><span class="stop"></span><strong>Read by GPT</strong><span class="tool">OpenAI API</span></li>
+        <li data-step="crm"><span class="stop"></span><strong>Logged to CRM</strong><span class="tool">Google Sheets</span></li>
+        <li data-step="draft"><span class="stop"></span><strong>Reply drafted</strong><span class="tool">Gmail</span></li>
+        <li data-step="notify"><span class="stop"></span><strong>Owner alerted</strong><span class="tool">Hot leads only</span></li>
+      </ol>
+      <p class="route-status" id="route-status" aria-live="polite">Waiting for a lead.</p>
+    </section>
+
+    <section class="result" id="result" hidden aria-labelledby="result-title">
+      <div class="score-block">
+        <div class="score" id="score" data-tier="">
+          <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="track" cx="60" cy="60" r="52"/><circle class="arc" id="score-arc" cx="60" cy="60" r="52"/></svg>
+          <span class="score-num" id="score-num">0</span>
+        </div>
+        <div>
+          <h2 id="result-title"><span id="tier-label">Warm lead</span></h2>
+          <p class="summary" id="summary"></p>
+          <p class="action" id="action"></p>
+        </div>
+      </div>
+
+      <div class="result-grid">
+        <div>
+          <h3>Why this score</h3>
+          <dl class="facts" id="facts"></dl>
+          <ul class="signals" id="signals"></ul>
+        </div>
+        <div>
+          <h3>Automation ideas</h3>
+          <ul class="ideas" id="ideas"></ul>
+          <h3>Pain points</h3>
+          <ul class="ideas" id="pains"></ul>
+        </div>
+        <div class="email">
+          <h3>Drafted reply</h3>
+          <p class="email-subject" id="email-subject"></p>
+          <pre class="email-body" id="email-body"></pre>
+        </div>
+      </div>
+      <p class="lead-id" id="lead-id"></p>
+    </section>
+
+    <section class="behind" id="behind" aria-labelledby="behind-title">
+      <h2 id="behind-title">Five workflows run behind the form</h2>
+      <p class="section-intro">Each one is an n8n workflow you can import from the repository. Together they cover the full lead lifecycle, from first contact to the morning briefing.</p>
+
+      <div class="workflows">
+        <article>
+          <h3>Lead intake and qualification</h3>
+          <p>Validates the submission, asks GPT for intent, fit and a personal reply, blends that with rule-based signals into one score, appends the lead to the Sheets CRM, saves a Gmail draft and emails the owner when a lead is hot.</p>
+          <p class="stack"><span>Webhook</span><span>Code</span><span>OpenAI</span><span>Google Sheets</span><span>Gmail</span></p>
+        </article>
+        <article>
+          <h3>Inbox triage agent</h3>
+          <p>An AI agent watches Gmail. It looks the sender up in the CRM, classifies the email, updates the lead's status and drafts a threaded reply. It has tools, not permission to send.</p>
+          <p class="stack"><span>Gmail trigger</span><span>AI Agent</span><span>Sheets tools</span><span>Gmail tool</span></p>
+        </article>
+        <article>
+          <h3>Morning pipeline briefing</h3>
+          <p>Every weekday at 07:30 it reads the CRM, works out what changed, finds hot leads nobody has contacted and emails a short GPT-written briefing.</p>
+          <p class="stack"><span>Schedule</span><span>Google Sheets</span><span>OpenAI</span><span>Gmail</span></p>
+        </article>
+        <article>
+          <h3>CRM API</h3>
+          <p>A read-only endpoint that powers the public pipeline page. Names are cut to first names and emails are masked before anything leaves n8n.</p>
+          <p class="stack"><span>Webhook</span><span>Google Sheets</span><span>Code</span></p>
+        </article>
+        <article>
+          <h3>Failure alerts</h3>
+          <p>If any workflow fails, an error workflow emails the owner the workflow name, failing node, message and a link to the execution.</p>
+          <p class="stack"><span>Error trigger</span><span>Gmail</span></p>
+        </article>
+      </div>
+    </section>
+
+    <section class="decisions" aria-labelledby="decisions-title">
+      <h2 id="decisions-title">Decisions worth explaining</h2>
+      <div class="decision-list">
+        <div>
+          <h3>A person approves every email</h3>
+          <p>The AI writes replies as drafts. Auto-sending from a public form would let anyone use the mailbox to email strangers, and a five-second review keeps the tone right.</p>
+        </div>
+        <div>
+          <h3>The score is part AI, part rules</h3>
+          <p>GPT judges intent and fit for 65% of the score. Budget, timeline, business email and detail make up the rest, so the number stays stable and a salesperson can see why it moved.</p>
+        </div>
+        <div>
+          <h3>No secrets in the browser</h3>
+          <p>The site talks to a Vercel function, which validates input, limits bursts and calls n8n with a shared header key. OpenAI and Google credentials live only inside n8n.</p>
+        </div>
+        <div>
+          <h3>One failed step doesn't lose the lead</h3>
+          <p>CRM and Gmail steps continue on error, so the visitor still gets a result and the error workflow tells the owner what to fix.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Designed and built by <strong>Andries Mokono</strong>, software engineer working in applied AI, Gauteng.</p>
+    <p><a href="https://www.linkedin.com/in/andries-mokono" data-link="linkedin">LinkedIn</a> <a href="https://github.com/drico999/leadpilot-ai" data-link="github">GitHub</a> <a href="/dashboard">Pipeline</a></p>
+  </footer>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

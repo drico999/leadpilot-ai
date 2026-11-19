@@ -1,0 +1,91 @@
+{
+  "name": "LeadPilot: 5. Error alerts",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "ff7b31b5-8eab-47ee-a88d-5939f59f44a9",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Format alert\" (Run once for all items)\n// Input comes from the Error Trigger.\n\nconst e = $input.first().json;\nconst wf = e.workflow || {};\nconst ex = e.execution || {};\nconst err = ex.error || {};\nconst esc = (s) => String(s == null ? '' : s).replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n\nconst html = `\n<div style=\"font-family:Arial,sans-serif;max-width:560px;color:#13202e\">\n  <h2 style=\"margin:0 0 8px;color:#b23a1f\">LeadPilot workflow failed</h2>\n  <p><strong>Workflow:</strong> ${esc(wf.name)}<br>\n     <strong>Failed node:</strong> ${esc(ex.lastNodeExecuted || 'unknown')}<br>\n     <strong>Mode:</strong> ${esc(ex.mode || '')}</p>\n  <p><strong>Error:</strong> ${esc(err.message || 'No message')}</p>\n  ${ex.url ? `<p><a href=\"${esc(ex.url)}\">Open the execution in n8n</a></p>` : ''}\n</div>`;\n\nreturn [{ json: { subject: `LeadPilot alert: \"${wf.name || 'workflow'}\" failed`, html } }];\n"
+      },
+      "id": "078e385a-7526-4097-a7d2-3abfba2be213",
+      "name": "Format alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "you@example.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "LeadPilot"
+        }
+      },
+      "id": "5faec8bf-aba4-4672-a060-8de3409dbccc",
+      "name": "Email owner",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "leadpilotGmail001",
+          "name": "Gmail account"
+        }
+      },
+      "webhookId": "903c6a1f-81e6-4562-a084-28eca2b7a67f"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Format alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format alert": {
+      "main": [
+        [
+          {
+            "node": "Email owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Johannesburg",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generatedBy": "leadpilot-ai/scripts/build-workflows.mjs"
+  }
+}

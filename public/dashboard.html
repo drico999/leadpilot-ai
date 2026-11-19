@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pipeline | LeadPilot AI</title>
+  <meta name="description" content="Live view of leads qualified by the LeadPilot AI automation, read from a Google Sheets CRM through n8n.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="LeadPilot home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="6" cy="16" r="4"/><circle cx="26" cy="7" r="3"/><circle cx="26" cy="16" r="3"/><circle cx="26" cy="25" r="3"/><path d="M10 16h6l6-9M16 16h7M16 16l6 9" fill="none" stroke-width="2.4"/></svg>
+      LeadPilot
+    </a>
+    <nav aria-label="Main">
+      <a href="/#demo">Live demo</a>
+      <a href="/dashboard" aria-current="page">Pipeline</a>
+      <a href="https://github.com/drico999/leadpilot-ai" data-link="github">Source code</a>
+    </nav>
+  </header>
+
+  <main class="dash">
+    <h1>Pipeline</h1>
+    <p class="lede">Every lead the automation has qualified, newest first, read from the Google Sheets CRM through an n8n endpoint. Names are shortened and contact details are never shown here.</p>
+    <p class="mode-note" id="mode-note" hidden></p>
+
+    <div class="tiers" id="tiers" aria-live="polite">
+      <div><strong id="t-total">–</strong><span>Leads shown</span></div>
+      <div class="hot"><strong id="t-hot">–</strong><span>Hot</span></div>
+      <div class="warm"><strong id="t-warm">–</strong><span>Warm</span></div>
+      <div class="cold"><strong id="t-cold">–</strong><span>Cold</span></div>
+    </div>
+    <div class="bar" id="bar" aria-hidden="true"></div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Received</th><th>Lead</th><th>Tier</th><th class="num">Score</th><th>Industry</th><th>Status</th><th>What they want</th></tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="7" class="dash-state">Loading the pipeline…</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>Designed and built by <strong>Andries Mokono</strong>, software engineer working in applied AI, Gauteng.</p>
+    <p><a href="https://www.linkedin.com/in/andries-mokono" data-link="linkedin">LinkedIn</a> <a href="https://github.com/drico999/leadpilot-ai" data-link="github">GitHub</a> <a href="/">Live demo</a></p>
+  </footer>
+  <script src="/dashboard.js" type="module"></script>
+</body>
+</html>

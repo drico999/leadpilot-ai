@@ -1,0 +1,238 @@
+{
+  "name": "LeadPilot: 3. Morning pipeline briefing",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 7 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "ea437051-da89-4f0f-ae37-f9c57c504076",
+      "name": "Weekdays 07:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "1c0aa874-7f48-451c-a5e4-65e627511805",
+      "name": "Read CRM",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "leadpilotSheets01",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Pipeline stats\" (Run once for all items)\n// Turns the raw CRM rows into the numbers the morning briefing needs.\n\nconst DAY = 24 * 3600 * 1000;\nconst now = Date.now();\nconst rows = $input.all().map((i) => i.json).filter((r) => r && r.lead_id);\n\nconst ts = (r) => Date.parse(r.received_at) || 0;\nconst last24 = rows.filter((r) => now - ts(r) < DAY);\nconst last7 = rows.filter((r) => now - ts(r) < 7 * DAY);\nconst byTier = (list) => ({\n  hot: list.filter((r) => r.tier === 'hot').length,\n  warm: list.filter((r) => r.tier === 'warm').length,\n  cold: list.filter((r) => r.tier === 'cold').length,\n});\nconst avg = (list) => (list.length ? Math.round(list.reduce((s, r) => s + (Number(r.score) || 0), 0) / list.length) : 0);\nconst open = (r) => !r.status || r.status === 'new';\n\nconst callFirst = rows\n  .filter((r) => r.tier === 'hot' && open(r))\n  .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))\n  .slice(0, 5)\n  .map((r) => ({ name: r.name, company: r.company, score: Number(r.score), summary: r.summary, age_hours: Math.round((now - ts(r)) / 3600000) }));\n\nconst stale = rows.filter((r) => r.tier !== 'cold' && open(r) && now - ts(r) > 2 * DAY).length;\n\nconst industries = {};\nlast7.forEach((r) => { const k = r.industry || 'Unknown'; industries[k] = (industries[k] || 0) + 1; });\nconst topIndustries = Object.entries(industries).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} (${v})`);\n\nreturn [{\n  json: {\n    stats: {\n      total_leads: rows.length,\n      new_last_24h: last24.length,\n      new_last_7d: last7.length,\n      tiers_last_7d: byTier(last7),\n      avg_score_last_7d: avg(last7),\n      hot_leads_not_contacted: callFirst,\n      warm_or_hot_waiting_over_48h: stale,\n      top_industries_last_7d: topIndustries,\n    },\n  },\n}];\n"
+      },
+      "id": "b4444d78-e486-4cd7-a823-1ef3f47aa951",
+      "name": "Pipeline stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify($json.stats, null, 2) }}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You write a short morning briefing for a solo AI-automation consultant.\nGiven pipeline statistics as JSON, write 3-5 crisp sentences: what changed, which leads to call first and why, and one risk (e.g. hot leads with no follow-up). Plain text, no greetings, no markdown."
+            }
+          ]
+        }
+      },
+      "id": "b28872cc-13d6-45da-ae67-43dad315bd65",
+      "name": "Write briefing",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        660,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "options": {
+          "temperature": 0.5,
+          "timeout": 45000,
+          "maxRetries": 2
+        }
+      },
+      "id": "ac962eed-50f5-403b-a1ba-9e32f00561ae",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        500
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "leadpilotOpenAI01",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Build briefing email\" (Run once for all items)\n\nconst stats = $('Pipeline stats').first().json.stats;\nconst item = $input.first().json;\nconst text = item.text || (item.error ? 'The AI summary could not be generated today; numbers below are still accurate.' : '');\nconst esc = (s) => String(s == null ? '' : s).replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n\nconst rows = stats.hot_leads_not_contacted.map((l) => `\n  <tr>\n    <td style=\"padding:6px 8px;border-bottom:1px solid #e3e7ec\"><strong>${esc(l.name)}</strong><br><span style=\"color:#556270\">${esc(l.company || '')}</span></td>\n    <td style=\"padding:6px 8px;border-bottom:1px solid #e3e7ec;text-align:right\">${l.score}</td>\n    <td style=\"padding:6px 8px;border-bottom:1px solid #e3e7ec;color:#33404e\">${esc(l.summary)}</td>\n  </tr>`).join('');\n\nconst t = stats.tiers_last_7d;\nconst html = `\n<div style=\"font-family:Arial,sans-serif;max-width:600px;color:#13202e\">\n  <h2 style=\"margin:0 0 12px\">Your pipeline this morning</h2>\n  <p style=\"font-size:15px;line-height:1.5\">${esc(text).replace(/\\n/g, '<br>')}</p>\n  <p style=\"color:#556270\">Last 24h: <strong>${stats.new_last_24h}</strong> new. Last 7 days: <strong>${stats.new_last_7d}</strong> (${t.hot} hot, ${t.warm} warm, ${t.cold} cold), average score ${stats.avg_score_last_7d}. Waiting over 48h: <strong>${stats.warm_or_hot_waiting_over_48h}</strong>.</p>\n  ${rows ? `<h3 style=\"margin:20px 0 6px\">Call these first</h3><table style=\"border-collapse:collapse;width:100%;font-size:14px\">${rows}</table>` : '<p>No uncontacted hot leads. Nice.</p>'}\n  <p style=\"color:#8a94a3;font-size:12px;margin-top:20px\">Sent by LeadPilot. Open the CRM: https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID</p>\n</div>`;\n\nconst d = new Date().toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' });\nreturn [{ json: { subject: `Pipeline briefing for ${d}: ${stats.new_last_24h} new, ${stats.hot_leads_not_contacted.length} to call`, html } }];\n"
+      },
+      "id": "6d2fea9e-793f-4e03-acb3-f13fcee24e26",
+      "name": "Build briefing email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "you@example.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "LeadPilot"
+        }
+      },
+      "id": "e5efa7d9-240b-497e-aec7-b20109210055",
+      "name": "Send briefing",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1180,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "leadpilotGmail001",
+          "name": "Gmail account"
+        }
+      },
+      "webhookId": "1b246846-aa5e-43cb-a58b-70f4d1c36710"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Weekdays 07:30": {
+      "main": [
+        [
+          {
+            "node": "Read CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read CRM": {
+      "main": [
+        [
+          {
+            "node": "Pipeline stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pipeline stats": {
+      "main": [
+        [
+          {
+            "node": "Write briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Write briefing",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write briefing": {
+      "main": [
+        [
+          {
+            "node": "Build briefing email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build briefing email": {
+      "main": [
+        [
+          {
+            "node": "Send briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Johannesburg",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generatedBy": "leadpilot-ai/scripts/build-workflows.mjs"
+  }
+}

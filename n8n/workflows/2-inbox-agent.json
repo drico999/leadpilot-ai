@@ -1,0 +1,718 @@
+{
+  "name": "LeadPilot: 2. Inbox triage agent",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "INBOX"
+          ],
+          "q": "-from:me -category:promotions -category:social -category:updates",
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "id": "6dd27f4c-0d57-4288-ae64-099bc3c0b9aa",
+      "name": "New email",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "leadpilotGmail001",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Prepare email\" (Run once for all items)\n// Normalises the Gmail Trigger output (simplify = off) for the AI agent.\n\nreturn $input.all().map((item) => {\n  const m = item.json;\n  const fromObj = (m.from && m.from.value && m.from.value[0]) || {};\n  const text = String(m.text || m.textAsHtml || m.snippet || '')\n    .replace(/\\r/g, '')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    // Drop quoted history so the agent reads only the new message.\n    .split(/\\nOn .+wrote:\\n/)[0]\n    .slice(0, 4000);\n\n  return {\n    json: {\n      message_id: m.id,\n      thread_id: m.threadId,\n      from_email: String(fromObj.address || '').toLowerCase(),\n      from_name: String(fromObj.name || ''),\n      subject: String(m.subject || '(no subject)').slice(0, 200),\n      received_at: m.date || new Date().toISOString(),\n      body: text,\n    },\n  };\n});\n"
+      },
+      "id": "b9cb4091-e413-4761-a0a3-27e6e5cf8479",
+      "name": "Prepare email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=New email to triage.\nFrom: {{ $json.from_name }} <{{ $json.from_email }}>\nSubject: {{ $json.subject }}\nThread ID (use for Draft reply): {{ $json.thread_id }}\nReceived: {{ $json.received_at }}\n\nBody:\n\"\"\"\n{{ $json.body }}\n\"\"\"",
+        "options": {
+          "systemMessage": "You are LeadPilot's inbox assistant for an AI automation consultant (Andries).\nFor each incoming email you must:\n1. Use the \"Find lead in CRM\" tool with the sender's email to check whether they are an existing lead.\n2. Classify the email: \"lead_reply\" | \"new_inquiry\" | \"meeting\" | \"invoice_or_admin\" | \"newsletter\" | \"spam\" | \"other\".\n3. If it is lead_reply or new_inquiry: use \"Update lead status\" to set the lead's status (e.g. \"replied\", \"meeting_requested\", \"new\") and a one-line note.\n4. If a human reply is needed (lead_reply, new_inquiry, meeting): use \"Draft reply\" to save a concise, friendly reply as a Gmail draft in the same thread. Never send email yourself.\n5. Finish with ONLY a JSON object:\n{\"category\": string, \"priority\": \"high\"|\"normal\"|\"low\", \"is_known_lead\": boolean, \"actions_taken\": [string], \"summary\": string (max 25 words)}",
+          "maxIterations": 8
+        }
+      },
+      "id": "341ced26-4a4c-4421-a475-f6e879b5c1ab",
+      "name": "Inbox agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "options": {
+          "temperature": 0.2,
+          "timeout": 45000,
+          "maxRetries": 2
+        }
+      },
+      "id": "903c7a50-42f2-48f6-a513-07b2bb284916",
+      "name": "OpenAI chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        340,
+        520
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "leadpilotOpenAI01",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Look up a lead in the CRM by email address. Returns the matching row (name, company, tier, score, status, summary) or nothing if the sender is unknown.",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "email",
+              "lookupValue": "={{ $fromAI('email', 'Sender email address, lowercase', 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "66f8a862-9a1c-4531-af82-1d1aff654a29",
+      "name": "Find lead in CRM",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        500,
+        520
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "leadpilotSheets01",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Create or update a lead row matched on email. Use to record a new status (new, replied, meeting_requested, not_interested) and a one-line note.",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $fromAI('email', 'Lead email address, lowercase', 'string') }}",
+            "status": "={{ $fromAI('status', 'One of: new, replied, meeting_requested, not_interested', 'string') }}",
+            "last_note": "={{ $fromAI('note', 'One-line note about this email', 'string') }}",
+            "updated_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "email"
+          ],
+          "schema": [
+            {
+              "id": "lead_id",
+              "displayName": "lead_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "website",
+              "displayName": "website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "budget",
+              "displayName": "budget",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "timeline",
+              "displayName": "timeline",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score",
+              "displayName": "score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tier",
+              "displayName": "tier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ai_score",
+              "displayName": "ai_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "rule_score",
+              "displayName": "rule_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "intent",
+              "displayName": "intent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "industry",
+              "displayName": "industry",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company_size",
+              "displayName": "company_size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "pain_points",
+              "displayName": "pain_points",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "automation_ideas",
+              "displayName": "automation_ideas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "recommended_action",
+              "displayName": "recommended_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_note",
+              "displayName": "last_note",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "74d65425-48e0-45b9-acaa-1b9ab917a608",
+      "name": "Update lead status",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.6,
+      "position": [
+        660,
+        520
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "leadpilotSheets01",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Save a reply as a Gmail draft in the same thread. A person reviews and sends it. Never claim the email was sent.",
+        "resource": "draft",
+        "subject": "={{ $fromAI('subject', 'Reply subject, usually Re: original subject', 'string') }}",
+        "emailType": "text",
+        "message": "={{ $fromAI('body', 'Plain-text reply body, signed Andries Mokono', 'string') }}",
+        "options": {
+          "threadId": "={{ $fromAI('thread_id', 'Thread ID from the email details', 'string') }}",
+          "sendTo": "={{ $fromAI('to', 'Recipient email address', 'string') }}"
+        }
+      },
+      "id": "5170b086-316e-435d-a0af-d2ebf463f658",
+      "name": "Draft reply",
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        820,
+        520
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "leadpilotGmail001",
+          "name": "Gmail account"
+        }
+      },
+      "webhookId": "fbd20136-b26b-4280-a4bc-ffe944e11814"
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node: \"Parse agent result\" (Run once for all items)\n// The agent ends with a JSON summary; turn it into a log row.\n\nconst emails = $('Prepare email').all();\n\nreturn $input.all().map((item, i) => {\n  const email = emails[i] ? emails[i].json : {};\n  const raw = String(item.json.output || '');\n  let r = {};\n  try {\n    const s = raw.indexOf('{');\n    const e = raw.lastIndexOf('}');\n    r = JSON.parse(raw.slice(s, e + 1));\n  } catch (err) {\n    r = { category: 'other', priority: 'normal', is_known_lead: false, actions_taken: [], summary: raw.slice(0, 200) };\n  }\n  return {\n    json: {\n      logged_at: new Date().toISOString(),\n      message_id: email.message_id || '',\n      from: email.from_email || '',\n      subject: email.subject || '',\n      category: String(r.category || 'other'),\n      priority: String(r.priority || 'normal'),\n      is_known_lead: r.is_known_lead ? 'yes' : 'no',\n      actions_taken: (Array.isArray(r.actions_taken) ? r.actions_taken : []).join('; '),\n      summary: String(r.summary || '').slice(0, 300),\n    },\n  };\n});\n"
+      },
+      "id": "b4478f89-5633-46ed-aaec-1f240e016d42",
+      "name": "Parse agent result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inbox Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "logged_at",
+              "displayName": "logged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "from",
+              "displayName": "from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "subject",
+              "displayName": "subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "priority",
+              "displayName": "priority",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "is_known_lead",
+              "displayName": "is_known_lead",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "actions_taken",
+              "displayName": "actions_taken",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "a90e47be-39f5-4e09-ac5a-f21490ac9ff3",
+      "name": "Log to Inbox Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        1040,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "leadpilotSheets01",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## Inbox triage agent\nPolls Gmail every minute for unread inbox mail (not from you, not promotions).\n\nThe AI agent has three tools: **Find lead in CRM**, **Update lead status** and **Draft reply**. It can draft but never send. Every decision is logged to the **Inbox Log** tab.",
+        "height": 260,
+        "width": 480,
+        "color": 5
+      },
+      "id": "37b87061-e1e8-47b1-acc5-f5a34da403e5",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -20
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "New email": {
+      "main": [
+        [
+          {
+            "node": "Prepare email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare email": {
+      "main": [
+        [
+          {
+            "node": "Inbox agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Inbox agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find lead in CRM": {
+      "ai_tool": [
+        [
+          {
+            "node": "Inbox agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update lead status": {
+      "ai_tool": [
+        [
+          {
+            "node": "Inbox agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft reply": {
+      "ai_tool": [
+        [
+          {
+            "node": "Inbox agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inbox agent": {
+      "main": [
+        [
+          {
+            "node": "Parse agent result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse agent result": {
+      "main": [
+        [
+          {
+            "node": "Log to Inbox Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Africa/Johannesburg",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generatedBy": "leadpilot-ai/scripts/build-workflows.mjs"
+  }
+}
