@@ -3,7 +3,7 @@
 Plan for about 60–90 minutes the first time. You'll end up with:
 
 - the website on Vercel (free Hobby plan is enough), and
-- the automation backend on n8n, connected to OpenAI, Gmail and Google Sheets.
+- the automation backend on n8n, connected to Groq (free AI), Gmail and Google Sheets.
 
 You can do part A alone first: the site works in **demo mode** until n8n is connected.
 
@@ -49,9 +49,9 @@ Pick one:
    OWNER_EMAIL=you@yourdomain.com
    OWNER_NAME=Andries Mokono
    SHEET_ID=<the id from step C>
-   OPENAI_MODEL=gpt-4.1-mini
+   LLM_PROVIDER=groq
    ```
-   Any current OpenAI chat model that supports JSON mode works; change `OPENAI_MODEL` if you prefer another.
+   Groq's free tier runs `openai/gpt-oss-120b` by default. To use the OpenAI API instead, set `LLM_PROVIDER=openai` (and optionally `LLM_MODEL`).
 2. Build:
    ```bash
    npm run build:workflows
@@ -65,7 +65,7 @@ Open **Credentials → Add credential** and create these four. Use exactly these
 
 | Credential name | Type | What to enter |
 |---|---|---|
-| `OpenAI account` | OpenAI | API key from platform.openai.com (add a small spend limit) |
+| `Groq account` | Groq | Free API key from console.groq.com → API Keys (or `OpenAI account` / OpenAI if you set `LLM_PROVIDER=openai`) |
 | `Gmail account` | Gmail OAuth2 | Sign in with Google (on self-hosted n8n you need a Google Cloud OAuth client first; see n8n's Google credentials docs) |
 | `Google Sheets account` | Google Sheets OAuth2 | Same Google account |
 | `LeadPilot webhook key` | Header Auth | Name: `X-LeadPilot-Key`, Value: a long random string (`openssl rand -hex 24`) |
@@ -102,9 +102,9 @@ Then set the error workflow: open workflows 1–4 → **Settings → Error workf
 | Site says "Automation backend returned 403" | The header key in Vercel doesn't match the n8n Header Auth credential. |
 | "Automation backend returned 404" | Workflow 1 isn't published, or you used the Test URL instead of the Production URL. |
 | Route shows "Logged to CRM: failed" | Tab names must be exactly `Leads` and `Inbox Log`; check `SHEET_ID` and the Sheets credential. |
-| "Read by GPT: failed" | Check the OpenAI key, billing and model name. Leads are still saved, scored on rules only. |
+| "Read by AI: failed" | Check the Groq key and model name, or the free-tier rate limit (wait a minute). Leads are still saved, scored on rules only. |
 | Gmail steps fail on self-hosted n8n | Enable the Gmail API in your Google Cloud project and add your account as a test user. |
 
 ## Costs
 
-Vercel Hobby and a Google account are free. OpenAI usage for this pipeline is a fraction of a US cent per lead with a mini model. n8n is free to self-host (you pay for the server) or a monthly plan on n8n Cloud.
+Vercel Hobby and a Google account are free. Groq's free tier covers portfolio traffic (it is rate-limited); with OpenAI, usage is a fraction of a US cent per lead with a mini model. n8n is free to self-host (you pay for the server) or a monthly plan on n8n Cloud.

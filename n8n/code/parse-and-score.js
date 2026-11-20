@@ -1,6 +1,6 @@
 // n8n Code node: "Parse and score" (Run once for all items)
-// Merges the validated lead with GPT's JSON and blends in rule-based signals.
-// If the OpenAI call failed (node set to continue on error) we fall back to
+// Merges the validated lead with the LLM's JSON and blends in rule-based signals.
+// If the LLM call failed (node set to continue on error) we fall back to
 // rules only, so the lead is never lost.
 /*__SCORING__*/
 

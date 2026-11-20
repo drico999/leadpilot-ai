@@ -60,7 +60,7 @@ test('Parse and score: string output in text', () => {
   assert.equal(out[0].json.ai_ok, true);
 });
 
-test('Parse and score: falls back to rules when OpenAI failed', () => {
+test('Parse and score: falls back to rules when the LLM failed', () => {
   const out = run(codeOf('1-lead-intake.json', 'Parse and score'), [{ error: 'Rate limit' }], { 'Validate lead': [{ valid: true, lead }] });
   assert.equal(out[0].json.ai_ok, false);
   assert.ok(out[0].json.qualification.reply_body.includes('Hi Thandi'));
@@ -147,7 +147,7 @@ test('Inbox: parse agent JSON result', () => {
 });
 
 test('Error alert formats message', () => {
-  const out = run(codeOf('5-error-alerts.json', 'Format alert'), [{ workflow: { name: 'LeadPilot: 1' }, execution: { lastNodeExecuted: 'Qualify with GPT', error: { message: 'Boom <b>' }, url: 'https://n8n/x' } }]);
+  const out = run(codeOf('5-error-alerts.json', 'Format alert'), [{ workflow: { name: 'LeadPilot: 1' }, execution: { lastNodeExecuted: 'Qualify with AI', error: { message: 'Boom <b>' }, url: 'https://n8n/x' } }]);
   assert.match(out[0].json.subject, /LeadPilot: 1/);
   assert.ok(out[0].json.html.includes('Boom &lt;b&gt;'));
 });

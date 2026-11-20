@@ -2,7 +2,7 @@
   "name": "leadpilot-ai",
   "version": "1.0.0",
   "private": true,
-  "description": "AI lead qualification and inbox automation with n8n, OpenAI, Gmail and Google Sheets, plus a live demo site on Vercel.",
+  "description": "AI lead qualification and inbox automation with n8n, LangChain, Groq/OpenAI, Gmail and Google Sheets, plus a live demo site on Vercel.",
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {

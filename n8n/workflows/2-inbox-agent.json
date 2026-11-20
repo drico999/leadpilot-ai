@@ -68,30 +68,24 @@
     },
     {
       "parameters": {
-        "model": {
-          "__rl": true,
-          "value": "gpt-4.1-mini",
-          "mode": "list",
-          "cachedResultName": "gpt-4.1-mini"
-        },
+        "model": "openai/gpt-oss-120b",
         "options": {
           "temperature": 0.2,
-          "timeout": 45000,
-          "maxRetries": 2
+          "maxTokensToSample": 4096
         }
       },
-      "id": "903c7a50-42f2-48f6-a513-07b2bb284916",
-      "name": "OpenAI chat model",
-      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
-      "typeVersion": 1.2,
+      "id": "c00453b6-dd67-44de-a4ad-ff23ee3937a4",
+      "name": "Groq chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
       "position": [
         340,
         520
       ],
       "credentials": {
-        "openAiApi": {
-          "id": "leadpilotOpenAI01",
-          "name": "OpenAI account"
+        "groqApi": {
+          "id": "leadpilotGroq0001",
+          "name": "Groq account"
         }
       }
     },
@@ -637,7 +631,7 @@
         ]
       ]
     },
-    "OpenAI chat model": {
+    "Groq chat model": {
       "ai_languageModel": [
         [
           {

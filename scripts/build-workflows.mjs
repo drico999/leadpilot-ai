@@ -6,7 +6,9 @@
 //   OWNER_EMAIL   where alerts and briefings go          (default: you@example.com)
 //   OWNER_NAME    name used to sign AI-drafted replies   (default: Andries Mokono)
 //   SHEET_ID      Google Sheets CRM document id          (default: YOUR_GOOGLE_SHEET_ID)
-//   OPENAI_MODEL  chat model for every AI step           (default: gpt-4.1-mini)
+//   LLM_PROVIDER  groq (free tier) or openai            (default: groq)
+//   LLM_MODEL     chat model for every AI step           (default: openai/gpt-oss-120b on Groq,
+//                                                          gpt-4.1-mini on OpenAI)
 //   TIMEZONE      workflow timezone                      (default: Africa/Johannesburg)
 //
 // Usage: npm run build:workflows
@@ -32,7 +34,8 @@ const CONFIG = {
   ownerEmail: process.env.OWNER_EMAIL || 'you@example.com',
   ownerName: process.env.OWNER_NAME || 'Andries Mokono',
   sheetId: process.env.SHEET_ID || 'YOUR_GOOGLE_SHEET_ID',
-  model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+  provider: (process.env.LLM_PROVIDER || 'groq').toLowerCase(),
+  model: process.env.LLM_MODEL || process.env.OPENAI_MODEL || '',
   timezone: process.env.TIMEZONE || 'Africa/Johannesburg',
 };
 
@@ -66,13 +69,18 @@ function node(wf, name, type, typeVersion, position, parameters, extra = {}) {
   return { parameters, id: uid(wf + ':' + name), name, type, typeVersion, position, ...extra };
 }
 
+if (!['groq', 'openai'].includes(CONFIG.provider)) throw new Error('LLM_PROVIDER must be groq or openai');
+CONFIG.model ||= CONFIG.provider === 'groq' ? 'openai/gpt-oss-120b' : 'gpt-4.1-mini';
+
 const cred = {
   sheets: { googleSheetsOAuth2Api: { id: 'leadpilotSheets01', name: 'Google Sheets account' } },
   gmail: { gmailOAuth2: { id: 'leadpilotGmail001', name: 'Gmail account' } },
   openai: { openAiApi: { id: 'leadpilotOpenAI01', name: 'OpenAI account' } },
+  groq: { groqApi: { id: 'leadpilotGroq0001', name: 'Groq account' } },
   header: { httpHeaderAuth: { id: 'leadpilotHeader01', name: 'LeadPilot webhook key' } },
 };
 
+const MODEL_NODE = CONFIG.provider === 'groq' ? 'Groq chat model' : 'OpenAI chat model';
 const doc = () => ({ __rl: true, value: CONFIG.sheetId, mode: 'id' });
 const tab = (name) => ({ __rl: true, value: name, mode: 'name' });
 
@@ -108,10 +116,17 @@ function ifNode(wf, name, position, leftValue, operator, rightValue) {
   });
 }
 
-function openAiModel(wf, name, position, { json = false, temperature = 0.3 } = {}) {
+// LangChain chat model sub-node. Groq (free tier) by default, OpenAI optional.
+function chatModel(wf, name, position, { json = false, temperature = 0.3 } = {}) {
+  if (CONFIG.provider === 'groq') {
+    return node(wf, MODEL_NODE, '@n8n/n8n-nodes-langchain.lmChatGroq', 1, position, {
+      model: CONFIG.model,
+      options: { temperature, maxTokensToSample: 4096 },
+    }, { credentials: cred.groq });
+  }
   const options = { temperature, timeout: 45000, maxRetries: 2 };
   if (json) options.responseFormat = 'json_object';
-  return node(wf, name, '@n8n/n8n-nodes-langchain.lmChatOpenAi', 1.2, position, {
+  return node(wf, MODEL_NODE, '@n8n/n8n-nodes-langchain.lmChatOpenAi', 1.2, position, {
     model: { __rl: true, value: CONFIG.model, mode: 'list', cachedResultName: CONFIG.model },
     options,
   }, { credentials: cred.openai });
@@ -167,17 +182,17 @@ function leadIntake() {
     }, { credentials: cred.header, webhookId: uid(W + 'webhook') }),
     code2(W, 'Validate lead', 'validate-lead.js', [220, 300]),
     ifNode(W, 'Is valid?', [440, 300], '={{ $json.valid }}', { type: 'boolean', operation: 'true', singleValue: true }),
-    node(W, 'Reject invalid lead', 'n8n-nodes-base.respondToWebhook', 1.4, [660, 520], {
+    node(W, 'Reject invalid lead', 'n8n-nodes-base.respondToWebhook', 1.4, [960, 600], {
       respondWith: 'json',
       responseBody: '={{ { ok: false, error: "Some fields need attention.", fields: $json.errors } }}',
       options: { responseCode: 422 },
     }),
-    node(W, 'Qualify with GPT', '@n8n/n8n-nodes-langchain.chainLlm', 1.7, [680, 280], {
+    node(W, 'Qualify with AI', '@n8n/n8n-nodes-langchain.chainLlm', 1.7, [680, 280], {
       promptType: 'define',
       text: '=' + QUALIFY_USER,
       messages: { messageValues: [{ message: QUALIFY_SYSTEM }] },
     }, { onError: 'continueRegularOutput' }),
-    openAiModel(W, 'OpenAI chat model', [680, 480], { json: true, temperature: 0.3 }),
+    chatModel(W, 'model', [680, 480], { json: true, temperature: 0.3 }),
     code2(W, 'Parse and score', 'parse-and-score.js', [1000, 300]),
     node(W, 'Append lead to CRM', 'n8n-nodes-base.googleSheets', 4.6, [1220, 300], {
       operation: 'append',
@@ -239,17 +254,17 @@ function leadIntake() {
       options: {},
     }),
     node(W, 'Note', 'n8n-nodes-base.stickyNote', 1, [-40, -40], {
-      content: '## Lead intake and qualification\nCalled by the website through `/api/lead` with the `X-LeadPilot-Key` header.\n\n1. Validate input (shared rules from `lib/scoring.js`)\n2. GPT reads intent and fit, writes a reply\n3. Score = 65% AI + 35% rules\n4. Append to the **Leads** tab, alert owner if hot, save a Gmail **draft**\n5. Answer the website with an honest step trace\n\nCRM and Gmail steps continue on error so a lead is never lost.',
+      content: '## Lead intake and qualification\nCalled by the website through `/api/lead` with the `X-LeadPilot-Key` header.\n\n1. Validate input (shared rules from `lib/scoring.js`)\n2. The LLM (via LangChain) reads intent and fit, writes a reply\n3. Score = 65% AI + 35% rules\n4. Append to the **Leads** tab, alert owner if hot, save a Gmail **draft**\n5. Answer the website with an honest step trace\n\nCRM and Gmail steps continue on error so a lead is never lost.',
       height: 300, width: 520, color: 4,
     }),
   ];
   const connections = connect([
     ['Lead webhook', 'Validate lead'],
     ['Validate lead', 'Is valid?'],
-    ['Is valid?', 'Qualify with GPT', { output: 0 }],
+    ['Is valid?', 'Qualify with AI', { output: 0 }],
     ['Is valid?', 'Reject invalid lead', { output: 1 }],
-    ['OpenAI chat model', 'Qualify with GPT', { type: 'ai_languageModel' }],
-    ['Qualify with GPT', 'Parse and score'],
+    [MODEL_NODE, 'Qualify with AI', { type: 'ai_languageModel' }],
+    ['Qualify with AI', 'Parse and score'],
     ['Parse and score', 'Append lead to CRM'],
     ['Append lead to CRM', 'Is hot?'],
     ['Is hot?', 'Alert owner', { output: 0 }],
@@ -280,7 +295,7 @@ function inboxAgent() {
       text: '=New email to triage.\nFrom: {{ $json.from_name }} <{{ $json.from_email }}>\nSubject: {{ $json.subject }}\nThread ID (use for Draft reply): {{ $json.thread_id }}\nReceived: {{ $json.received_at }}\n\nBody:\n"""\n{{ $json.body }}\n"""',
       options: { systemMessage: fill(INBOX_AGENT_SYSTEM), maxIterations: 8 },
     }),
-    openAiModel(W, 'OpenAI chat model', [340, 520], { temperature: 0.2 }),
+    chatModel(W, 'model', [340, 520], { temperature: 0.2 }),
     node(W, 'Find lead in CRM', 'n8n-nodes-base.googleSheetsTool', 4.6, [500, 520], {
       descriptionType: 'manual',
       toolDescription: 'Look up a lead in the CRM by email address. Returns the matching row (name, company, tier, score, status, summary) or nothing if the sender is unknown.',
@@ -345,7 +360,7 @@ function inboxAgent() {
   const connections = connect([
     ['New email', 'Prepare email'],
     ['Prepare email', 'Inbox agent'],
-    ['OpenAI chat model', 'Inbox agent', { type: 'ai_languageModel' }],
+    [MODEL_NODE, 'Inbox agent', { type: 'ai_languageModel' }],
     ['Find lead in CRM', 'Inbox agent', { type: 'ai_tool' }],
     ['Update lead status', 'Inbox agent', { type: 'ai_tool' }],
     ['Draft reply', 'Inbox agent', { type: 'ai_tool' }],
@@ -378,7 +393,7 @@ function briefing() {
       text: '={{ JSON.stringify($json.stats, null, 2) }}',
       messages: { messageValues: [{ message: DIGEST_SYSTEM }] },
     }, { onError: 'continueRegularOutput' }),
-    openAiModel(W, 'OpenAI chat model', [660, 500], { temperature: 0.5 }),
+    chatModel(W, 'model', [660, 500], { temperature: 0.5 }),
     code2(W, 'Build briefing email', 'briefing-email.js', [960, 300]),
     gmailSend(W, 'Send briefing', [1180, 300], { to: CONFIG.ownerEmail, subject: '={{ $json.subject }}', html: '={{ $json.html }}' }),
   ];
@@ -386,7 +401,7 @@ function briefing() {
     ['Weekdays 07:30', 'Read CRM'],
     ['Read CRM', 'Pipeline stats'],
     ['Pipeline stats', 'Write briefing'],
-    ['OpenAI chat model', 'Write briefing', { type: 'ai_languageModel' }],
+    [MODEL_NODE, 'Write briefing', { type: 'ai_languageModel' }],
     ['Write briefing', 'Build briefing email'],
     ['Build briefing email', 'Send briefing'],
   ]);
@@ -452,4 +467,4 @@ for (const [file, wf] of Object.entries(files)) {
   writeFileSync(join(outDir, file), JSON.stringify(wf, null, 2) + '\n');
   console.log(`wrote n8n/workflows/${file}  (${wf.nodes.length} nodes)`);
 }
-console.log(`config: owner=${CONFIG.ownerEmail} sheet=${CONFIG.sheetId} model=${CONFIG.model}`);
+console.log(`config: owner=${CONFIG.ownerEmail} sheet=${CONFIG.sheetId} ai=${CONFIG.provider}/${CONFIG.model}`);

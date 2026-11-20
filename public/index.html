@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LeadPilot AI: inbound lead automation with n8n and OpenAI</title>
-  <meta name="description" content="A live AI automation that reads, scores, logs and answers inbound leads in seconds. Built with n8n, the OpenAI API, Gmail and Google Sheets by Andries Mokono.">
+  <title>LeadPilot AI: inbound lead automation with n8n and LangChain</title>
+  <meta name="description" content="A live AI automation that reads, scores, logs and answers inbound leads in seconds. Built with n8n, LangChain, Groq, Gmail and Google Sheets by Andries Mokono.">
   <meta property="og:title" content="LeadPilot AI: inbound leads, qualified in seconds">
-  <meta property="og:description" content="Fill in the form and watch an n8n + OpenAI pipeline score your lead, log it to a Google Sheets CRM and draft a reply.">
+  <meta property="og:description" content="Fill in the form and watch an n8n + LangChain AI pipeline score your lead, log it to a Google Sheets CRM and draft a reply.">
   <meta property="og:type" content="website">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -33,7 +33,7 @@
     <section class="hero" id="demo" aria-labelledby="hero-title">
       <div class="hero-copy">
         <h1 id="hero-title">Every new lead is read, scored, logged and answered in under ten seconds.</h1>
-        <p class="lede">LeadPilot is a working AI automation built with n8n, the OpenAI API, Gmail and Google Sheets. Fill in the form as if you were a client and watch each step run.</p>
+        <p class="lede">LeadPilot is a working AI automation built with n8n, LangChain, a Groq-hosted GPT-OSS model, Gmail and Google Sheets. Fill in the form as if you were a client and watch each step run.</p>
         <p class="mode-note" id="mode-note" hidden></p>
       </div>
 
@@ -90,7 +90,7 @@
       <ol class="route" id="route">
         <li data-step="webhook"><span class="stop"></span><strong>Form received</strong><span class="tool">n8n webhook</span></li>
         <li data-step="validate"><span class="stop"></span><strong>Checked</strong><span class="tool">Code node</span></li>
-        <li data-step="ai"><span class="stop"></span><strong>Read by GPT</strong><span class="tool">OpenAI API</span></li>
+        <li data-step="ai"><span class="stop"></span><strong>Read by AI</strong><span class="tool">LangChain + Groq</span></li>
         <li data-step="crm"><span class="stop"></span><strong>Logged to CRM</strong><span class="tool">Google Sheets</span></li>
         <li data-step="draft"><span class="stop"></span><strong>Reply drafted</strong><span class="tool">Gmail</span></li>
         <li data-step="notify"><span class="stop"></span><strong>Owner alerted</strong><span class="tool">Hot leads only</span></li>
@@ -139,18 +139,18 @@
       <div class="workflows">
         <article>
           <h3>Lead intake and qualification</h3>
-          <p>Validates the submission, asks GPT for intent, fit and a personal reply, blends that with rule-based signals into one score, appends the lead to the Sheets CRM, saves a Gmail draft and emails the owner when a lead is hot.</p>
-          <p class="stack"><span>Webhook</span><span>Code</span><span>OpenAI</span><span>Google Sheets</span><span>Gmail</span></p>
+          <p>Validates the submission, asks the LLM for intent, fit and a personal reply, blends that with rule-based signals into one score, appends the lead to the Sheets CRM, saves a Gmail draft and emails the owner when a lead is hot.</p>
+          <p class="stack"><span>Webhook</span><span>Code</span><span>LLM Chain</span><span>Groq</span><span>Google Sheets</span><span>Gmail</span></p>
         </article>
         <article>
           <h3>Inbox triage agent</h3>
           <p>An AI agent watches Gmail. It looks the sender up in the CRM, classifies the email, updates the lead's status and drafts a threaded reply. It has tools, not permission to send.</p>
-          <p class="stack"><span>Gmail trigger</span><span>AI Agent</span><span>Sheets tools</span><span>Gmail tool</span></p>
+          <p class="stack"><span>Gmail trigger</span><span>LangChain AI Agent</span><span>Sheets tools</span><span>Gmail tool</span></p>
         </article>
         <article>
           <h3>Morning pipeline briefing</h3>
-          <p>Every weekday at 07:30 it reads the CRM, works out what changed, finds hot leads nobody has contacted and emails a short GPT-written briefing.</p>
-          <p class="stack"><span>Schedule</span><span>Google Sheets</span><span>OpenAI</span><span>Gmail</span></p>
+          <p>Every weekday at 07:30 it reads the CRM, works out what changed, finds hot leads nobody has contacted and emails a short AI-written briefing.</p>
+          <p class="stack"><span>Schedule</span><span>Google Sheets</span><span>LLM Chain</span><span>Gmail</span></p>
         </article>
         <article>
           <h3>CRM API</h3>
@@ -174,11 +174,11 @@
         </div>
         <div>
           <h3>The score is part AI, part rules</h3>
-          <p>GPT judges intent and fit for 65% of the score. Budget, timeline, business email and detail make up the rest, so the number stays stable and a salesperson can see why it moved.</p>
+          <p>The AI judges intent and fit for 65% of the score. Budget, timeline, business email and detail make up the rest, so the number stays stable and a salesperson can see why it moved.</p>
         </div>
         <div>
           <h3>No secrets in the browser</h3>
-          <p>The site talks to a Vercel function, which validates input, limits bursts and calls n8n with a shared header key. OpenAI and Google credentials live only inside n8n.</p>
+          <p>The site talks to a Vercel function, which validates input, limits bursts and calls n8n with a shared header key. AI and Google credentials live only inside n8n.</p>
         </div>
         <div>
           <h3>One failed step doesn't lose the lead</h3>

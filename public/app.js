@@ -44,7 +44,7 @@ fetch('/api/leads').then((r) => r.json()).then((d) => {
 
 function showDemoNote() {
   const note = $('#mode-note');
-  note.textContent = 'Demo mode: the automation backend isn\'t connected on this deployment, so GPT is replaced by a rules engine and the CRM, Gmail and alert steps are simulated.';
+  note.textContent = 'Demo mode: the automation backend isn\'t connected on this deployment, so the AI model is replaced by a rules engine and the CRM, Gmail and alert steps are simulated.';
   note.hidden = false;
 }
 
@@ -75,7 +75,7 @@ async function runWaitingAnimation() {
   if (!ticking) return;
   setStop('validate', 'done');
   setStop('ai', 'active');
-  routeStatus.textContent = 'GPT is reading the message and scoring the lead.';
+  routeStatus.textContent = 'The AI is reading the message and scoring the lead.';
 }
 
 async function playActions(actions) {
